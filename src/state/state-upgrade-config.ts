@@ -1,10 +1,8 @@
 import fs from "node:fs";
-import path from "node:path";
 import JSON5 from "json5";
 import { readConfigIncludeFileWithGuards, resolveConfigIncludes } from "../config/includes.js";
 import { coerceConfig } from "../config/io.read-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { fileStamp } from "./state-upgrade-tree.js";
 
 export function readUpgradeConfig(configPath: string): {
   config: OpenClawConfig;
@@ -36,31 +34,4 @@ export function readUpgradeConfig(configPath: string): {
   } catch {
     return { config: {}, files };
   }
-}
-
-/** Stage only authored config dependencies, including inputs excluded by the state copy. */
-export function copyUpgradeConfigInputs(params: {
-  configPath: string;
-  shadowConfig: string;
-  files: ReadonlyMap<string, { raw: string; canonicalPath: string }>;
-  baseline?: Map<string, string | undefined>;
-}): Map<string, string> {
-  const configDir = path.dirname(params.configPath);
-  const shadowDir = path.dirname(params.shadowConfig);
-  const inputs = new Map([[params.configPath, params.shadowConfig]]);
-  for (const [file, { raw, canonicalPath }] of params.files) {
-    const relative = path.relative(configDir, file);
-    // An absolute alias stays inside the private tree at its admitted canonical location.
-    const within =
-      relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
-    const target = path.join(
-      shadowDir,
-      within ? relative : path.relative(fs.realpathSync(configDir), canonicalPath),
-    );
-    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(target, raw, { mode: fs.statSync(file).mode & 0o7777 });
-    params.baseline?.set(target, fileStamp(target));
-    inputs.set(file, target);
-  }
-  return inputs;
 }

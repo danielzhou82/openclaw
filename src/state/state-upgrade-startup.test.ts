@@ -14,19 +14,6 @@ import {
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { upgradeStateOnGatewayStart } from "./state-upgrade-startup.js";
 
-vi.mock("./state-upgrade-doctor.js", async (original) => ({
-  ...(await original<typeof import("./state-upgrade-doctor.js")>()),
-  // The fixture already has current tables; only the schema stamp needs upgrading.
-  // Keep config admission, native readers, publication, and cleanup real.
-  createDoctorChain:
-    () =>
-    async ({ stateDir }: { stateDir: string }) => {
-      using db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
-      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
-      return { warnings: [] };
-    },
-}));
-
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
@@ -42,7 +29,7 @@ it.each([
   { name: "beside an external config", apiKey: undefined, layout: "external" },
   { name: "inside the workspace", apiKey: undefined, layout: "workspace" },
   { name: "with a missing include", apiKey: undefined, layout: "missing" },
-])("reopens published state after provider config admission $name", async ({ apiKey, layout }) => {
+])("reopens canonical state after provider config admission $name", async ({ apiKey, layout }) => {
   vi.spyOn(processRole, "getDatabaseProcessRole").mockReturnValue("gateway");
   const root = dirs.make("state-upgrade-reader-");
   const stateDir = path.join(root, "state");
@@ -101,7 +88,7 @@ it.each([
     if (layout !== "inline") {
       expect(fs.readFileSync(includePath, "utf8")).toBe(JSON.stringify(models));
     }
-    // Startup reopens the published database in WAL mode before preparing secrets.
+    // Startup releases migration custody before preparing secrets against the live database.
     using runtime = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
     runtime.exec("PRAGMA journal_mode = WAL");
     await expect(prepareSharedAuthStoreOwnership(env)).resolves.toEqual({ location: "state-db" });
