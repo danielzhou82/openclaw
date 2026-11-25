@@ -165,6 +165,34 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    in the same update details and warning count; they never fail the core update
    or trigger rollback.
 
+Once the resident launcher owns an installation, `gateway install` keeps that
+state directory's selected launcher as its service entry. Explicit retained-CLI
+recovery still uses the requested recovery entry. Dry runs keep the existing
+read-only preview. Immutable activation and switches that need the in-place
+installer refuse with a next step; they never replace a launcher-owned
+installation through that other path.
+Explicit package versions, dist-tags, npm specs, and `--no-restart` keep their
+prepared-release behavior.
+
+Before conversion, a node-only package installation with an installed node service, no
+Gateway service definition, and no live local Gateway stays with its package installer.
+`openclaw update` uses the existing package update flow for that installation;
+it does not create a Gateway launcher, forwarding entry, or pending Gateway trial.
+Its package result names the updated installation's `node install --force` and
+`node restart` commands. Wait for node work to become idle before using them;
+the package update does not claim to have replaced or restarted a retained node
+runtime.
+
+A previously converted installation keeps its resident release owner even if its
+Gateway service was removed; `--no-restart` can still prepare its next release.
+
+Before first conversion, a live foreground Gateway can lose its installation
+path from OS process inspection. With operator access, let that Gateway handle
+the update through Control UI or `openclaw update`. If it cannot accept the
+requested update over RPC, local preparation refuses visibly rather than
+claiming an unidentified installation. Stop the Gateway through its existing
+owner, then rerun the update. A stopped Gateway remains updatable.
+
 Early Git source-updater recovery is a compatibility exception. Its separate CLI
 worker never enters Gateway startup. It opens a repair run after the first
 readiness check and finishes rebuilding and cleanup after the second. Neither
@@ -180,12 +208,13 @@ before mutating live databases. A schema-version increase alone does not require
 a preimage: compatible steps run in place without one.
 
 Before any floor-raising step, boot publishes the complete recovery manifest at
-`releases/<target>/.restore`, using the existing v1 format. Only databases whose
-derived minimum reader floor rises receive database preimages. SQLite images
-are independent clones or byte copies, never hard links to a database that will
-be mutated in place. Their `.pre-<build-generation>` names remain discoverable by
-existing launchers. The manifest records the images used for rollback; a
-raised-floor database can roll back only through its recorded image.
+`<prefix>/releases/<target-release-id>/.restore`, keeping the existing
+`{v:1,runId,files:[{live,preimage}]}` format. Paths are absolute; a null preimage
+means remove that file on rollback. Only databases whose derived minimum reader
+floor rises receive database preimages. SQLite images are independent clones or
+byte copies, never hard links to a database that will be mutated in place. Their
+`.pre-<build-generation>` names remain discoverable by existing launchers.
+A raised-floor database can roll back only through its recorded image.
 
 The existing launcher's `.pre-<build-generation>` scan still bounds automatic
 recovery coverage for floor-raising migrations. `check-release` refuses those
@@ -197,8 +226,23 @@ coverage and do not refuse an external database merely because it is external.
 
 The same canonical in-place migration owners run on ordinary starts and release
 trials, under existing custody. There is no private tree, Doctor subprocess chain,
-generic rebuild, or forward file swap or rename. A failed trial retains the
-existing configuration refusal (exit 78) and launcher recovery path.
+generic rebuild, or forward file swap or rename. A trial started by an older
+preparer repeats admission before migration. A refused trial exits 78 and the
+launcher restores the previous release. Ordinary non-trial starts, including
+manual package upgrades, keep their existing migration-on-open behavior: a
+store's size alone never prevents that Gateway from starting.
+
+The launcher's selected target owns the prepared release directory and its
+`.restore` receipt, so a retry from an older preparer cannot reuse another
+release's receipt. The complete manifest and independent images are durable
+before live mutation. Retries reuse their immutable originals rather than
+re-imaging changed state. A trial with no floor-raising step records an empty
+database restore plan.
+
+The `.restore` receipt stays with its prepared release. Independent
+`.pre-<build-generation>` images remain under the existing `pruneGenerations`
+retention, now owned by the restore module. Committing a trial does not trigger
+captured-image cleanup; in-place migration adds no post-commit cleanup hook.
 
 ### Uncovered database paths
 
@@ -275,6 +319,20 @@ then serve its seeded cron, sessions, and message history. Lazy stores that
 did not advance are reported as untouched, not claimed migrated. The
 compatibility gate becomes required when the candidate includes the
 reader-floor contract; fixture, target-schema, and integrity errors always fail.
+
+The selected lane also runs the agent SQLite migration chain from the fork-point
+schema through the real maintenance owner. Its test-side native observer rejects
+bulk-data access: statements that read or write transcript, cold-archive,
+embedding, or FTS rows, including `WHERE 0`, and index builds over those rows.
+Constant-time metadata DDL is allowed, but touching a bulk table while raising
+that store's reader floor fails. Failures name the store and version range.
+Real owner integrity checks still run unchanged; only their dynamic test-side
+boundary is excluded from migration-access classification; migration-supplied
+callbacks remain observed. Unsupported observation APIs fail coverage instead of
+silently passing. The sanitized `migration-bulk-access.json` receipt is retained
+even when observation fails, with the attempted version range. Failed observations
+retain statement identity, method, SQL source, and integrity/coverage facts, not
+database objects, catalog snapshots, or queried row values.
 
 - **Platforms:** a Linux systemd user service, a Linux container without a user
   bus, a macOS LaunchAgent and a Windows Scheduled Task. (#203497 merged with

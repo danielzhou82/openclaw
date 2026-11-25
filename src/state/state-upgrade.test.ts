@@ -139,7 +139,7 @@ describe("canonical in-place migration", () => {
           INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
             VALUES ('primary', 'global', 41, 1, 1);
           INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '41', 1);
-          INSERT INTO config_machine_state VALUES ('upgrade-witness', '"before"', 1);`);
+          INSERT INTO config_machine_state VALUES ('plugins.bundledDiscovery', '"all"', 1);`);
         using agent = new DatabaseSync(agentPath);
         agent.exec(getOpenClawAgentMigrationSchema(43));
         agent.exec(`PRAGMA user_version = 43;
@@ -159,14 +159,29 @@ describe("canonical in-place migration", () => {
         );
         await writeTrial({ ...pending, phase: "trial" }, prefix);
       }
-      const lock = await acquireGatewayLock({ env, databaseAccess: "none", allowInTests: true });
-      try {
-        await expect(
-          upgradeStateDirectory({ env, log: { info() {}, warn() {} } }),
-        ).resolves.toEqual({ status: "upgraded" });
-      } finally {
-        await lock?.release();
-      }
+      const rename = fs.renameSync;
+      const publication = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+        if (String(destination) === manifestPath) {
+          // The durable restore intent must precede the first canonical mutation.
+          using live = new DatabaseSync(statePath, { readOnly: true });
+          expect(live.prepare("PRAGMA user_version").get()).toEqual({ user_version: 41 });
+          using agent = new DatabaseSync(agentPath, { readOnly: true });
+          expect(agent.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
+        }
+        rename(source, destination);
+      });
+      const upgrade = async () => {
+        const lock = await acquireGatewayLock({ env, role: "sqlite-maintenance", allowInTests: true });
+        try {
+          return await lock?.run(() =>
+            upgradeStateDirectory({ env, log: { info() {}, warn() {} } }),
+          );
+        } finally {
+          await lock?.release();
+        }
+      };
+      await expect(upgrade()).resolves.toEqual({ status: "upgraded" });
+      publication.mockRestore();
       for (const [file, identity] of [
         [statePath, stateIdentity],
         [agentPath, agentIdentity],
@@ -190,7 +205,7 @@ describe("canonical in-place migration", () => {
           OPENCLAW_STATE_SCHEMA_VERSION,
         );
         state.exec(
-          `UPDATE config_machine_state SET value_json = '"after"' WHERE state_key = 'upgrade-witness'`,
+          `UPDATE config_machine_state SET value_json = '"allowlist"' WHERE state_key = 'plugins.bundledDiscovery'`,
         );
         using agent = new DatabaseSync(agentPath);
         expect(agent.prepare("PRAGMA user_version").get()).toEqual({
@@ -203,17 +218,18 @@ describe("canonical in-place migration", () => {
       await expect(
         executeExistingOpenClawStateRead(
           { env },
-          { type: "plugins.metadata.read", input: { stateKeys: ["upgrade-witness"] } },
+          { type: "plugins.metadata.read", input: { stateKeys: ["plugins.bundledDiscovery"] } },
         ),
       ).resolves.toMatchObject({
         type: "plugins.metadata.read",
-        rows: [{ state_key: "upgrade-witness", value_json: '"after"' }],
+        rows: [{ state_key: "plugins.bundledDiscovery", value_json: '"allowlist"' }],
       });
       const preimage = `${statePath}.pre-${resolveRuntimeServiceBuildId() ?? VERSION}`;
       expect(fs.existsSync(manifestPath)).toBe(trial);
       expect(fs.existsSync(preimage)).toBe(trial);
       if (trial) {
-        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+        const encoded = fs.readFileSync(manifestPath, "utf8");
+        const manifest = JSON.parse(encoded) as {
           v: number;
           runId: string;
           files: Array<{ live: string; preimage: string | null }>;
@@ -229,8 +245,15 @@ describe("canonical in-place migration", () => {
         expect(
           image
             .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-            .get("upgrade-witness"),
-        ).toEqual({ value_json: '"before"' });
+            .get("plugins.bundledDiscovery"),
+        ).toEqual({ value_json: '"all"' });
+        const imageIdentity = fs.statSync(preimage);
+        await expect(upgrade()).resolves.toEqual({ status: "current" });
+        expect(fs.readFileSync(manifestPath, "utf8")).toBe(encoded);
+        expect(fs.statSync(preimage)).toMatchObject({
+          dev: imageIdentity.dev,
+          ino: imageIdentity.ino,
+        });
       }
     },
   );
