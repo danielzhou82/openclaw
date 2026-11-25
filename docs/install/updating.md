@@ -235,6 +235,11 @@ preparer repeats admission before migration. A refused trial exits 78 and the
 launcher restores the previous release. Ordinary non-trial starts, including
 manual package upgrades, keep their existing migration-on-open behavior: a
 store's size alone never prevents that Gateway from starting.
+Older releases can still keep sessions and other state in legacy files. Boot
+runs Doctor's existing legacy-file import owner in place, with its existing
+backups, then the canonical schema steps and ordinary config rewrite. These
+imports are not a copied-state Doctor process. Direct upgrades from 2026.7.x
+retain their session history.
 
 The launcher's selected target owns the prepared release directory and its
 `.restore` receipt, so a retry from an older preparer cannot reuse another
